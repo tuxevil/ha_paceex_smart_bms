@@ -1,0 +1,24 @@
+{
+  "title": "BMS PACEEX",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Conectar al BMS PACEEX",
+        "description": "Conexión directa al módulo Wi-Fi local del BMS de la batería.",
+        "data": {
+          "host": "Dirección IP",
+          "port": "Puerto",
+          "scan_interval": "Intervalo de actualización (segundos)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "No fue posible conectar con el BMS",
+      "invalid_response": "El dispositivo devolvió una respuesta PACEEX no válida",
+      "unknown": "Error inesperado"
+    },
+    "abort": {
+      "already_configured": "Este BMS ya está configurado"
+    }
+  }
+}

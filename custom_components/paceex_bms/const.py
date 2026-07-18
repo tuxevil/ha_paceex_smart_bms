@@ -1,0 +1,12 @@
+"""Constants for the PACEEX BMS integration."""
+
+DOMAIN = "paceex_bms"
+CONF_PORT = "port"
+CONF_SCAN_INTERVAL = "scan_interval"
+
+DEFAULT_PORT = 8888
+DEFAULT_SCAN_INTERVAL = 15
+MIN_SCAN_INTERVAL = 5
+
+MANUFACTURER = "PeiCheng Technology"
+MODEL = "PACEEX Smart BMS"

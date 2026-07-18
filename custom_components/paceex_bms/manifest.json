@@ -1,0 +1,12 @@
+{
+  "domain": "paceex_bms",
+  "name": "PACEEX BMS",
+  "codeowners": ["@tuxevil"],
+  "config_flow": true,
+  "documentation": "https://github.com/tuxevil/ha_paceex_smart_bms",
+  "issue_tracker": "https://github.com/tuxevil/ha_paceex_smart_bms/issues",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "requirements": [],
+  "version": "0.1.0"
+}
