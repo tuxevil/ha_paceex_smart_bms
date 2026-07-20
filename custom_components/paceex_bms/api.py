@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import socket
+import time
 
 STATUS_QUERY = bytes.fromhex("9a00000a0000000019519d")
 CELLS_QUERY = bytes.fromhex("9a00000a020000020101289c9d")
 SERIAL_QUERY = bytes.fromhex("9a00000002000000a0c89d")
+QUERY_COOLDOWN = 1
 
 
 class PaceexError(Exception):
@@ -89,6 +91,8 @@ class PaceexBmsApi:
     def read_status(self) -> dict[str, float | int]:
         """Read system and individual cell data."""
         status = self._query(STATUS_QUERY)
+        # The Wi-Fi adapter briefly stops accepting connections after a reply.
+        time.sleep(QUERY_COOLDOWN)
         cells_response = self._query(CELLS_QUERY)
 
         cell_count = cells_response[11]

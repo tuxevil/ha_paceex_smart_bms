@@ -20,5 +20,16 @@
     "abort": {
       "already_configured": "Este BMS ya está configurado"
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opciones del BMS PACEEX",
+        "description": "Ajusta la configuración de sondeo local para este BMS.",
+        "data": {
+          "scan_interval": "Intervalo de actualización (segundos)"
+        }
+      }
+    }
   }
 }

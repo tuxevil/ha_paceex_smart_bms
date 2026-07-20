@@ -20,5 +20,16 @@
     "abort": {
       "already_configured": "This BMS is already configured"
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "PACEEX BMS options",
+        "description": "Adjust local polling settings for this BMS.",
+        "data": {
+          "scan_interval": "Update interval (seconds)"
+        }
+      }
+    }
   }
 }

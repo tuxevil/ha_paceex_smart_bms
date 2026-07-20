@@ -109,6 +109,9 @@ During setup, the integration reads the BMS serial number and a complete status
 sample. Configuration is rejected if the endpoint is unreachable or does not
 return valid PACEEX frames.
 
+To change the polling interval later, open the integration entry in Home
+Assistant, select **Configure**, and save a new update interval.
+
 ## Finding the BMS on your network
 
 The wireless module may advertise over Bluetooth as `PC-` followed by the last

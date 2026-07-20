@@ -16,6 +16,11 @@ PLATFORMS = [Platform.SENSOR]
 PaceexConfigEntry: TypeAlias = ConfigEntry[PaceexDataUpdateCoordinator]
 
 
+async def _async_update_listener(hass: HomeAssistant, entry: PaceexConfigEntry) -> None:
+    """Handle options update."""
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: PaceexConfigEntry) -> bool:
     """Set up PACEEX BMS from a config entry."""
     api = PaceexBmsApi(
@@ -33,6 +38,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: PaceexConfigEntry) -> bo
     )
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
