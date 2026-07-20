@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import socket
 import time
 
@@ -10,6 +11,9 @@ STATUS_QUERY = bytes.fromhex("9a00000a0000000019519d")
 CELLS_QUERY = bytes.fromhex("9a00000a020000020101289c9d")
 SERIAL_QUERY = bytes.fromhex("9a00000002000000a0c89d")
 QUERY_COOLDOWN = 1
+QUERY_RETRY_DELAYS = (1, 2, 4)
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class PaceexError(Exception):
@@ -49,6 +53,26 @@ class PaceexBmsApi:
         self.timeout = timeout
 
     def _query(self, query: bytes) -> bytes:
+        for attempt in range(len(QUERY_RETRY_DELAYS) + 1):
+            try:
+                return self._query_once(query)
+            except PaceexError as err:
+                if attempt == len(QUERY_RETRY_DELAYS):
+                    raise
+
+                retry_delay = QUERY_RETRY_DELAYS[attempt]
+                _LOGGER.debug(
+                    "PACEEX query attempt %s failed; retrying in %s second(s): %s",
+                    attempt + 1,
+                    retry_delay,
+                    err,
+                )
+                time.sleep(retry_delay)
+
+        raise PaceexConnectionError("PACEEX query failed")
+
+    def _query_once(self, query: bytes) -> bytes:
+        """Send one query without retrying."""
         try:
             with socket.create_connection((self.host, self.port), self.timeout) as sock:
                 sock.settimeout(self.timeout)

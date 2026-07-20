@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import time
 import unittest
+from unittest.mock import call, patch
 
 sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "custom_components" / "paceex_bms")
@@ -16,6 +17,7 @@ from api import (  # noqa: E402
     STATUS_QUERY,
     PaceexBmsApi,
     PaceexConnectionError,
+    _crc_modbus,
 )
 
 
@@ -57,6 +59,49 @@ class ReadStatusTest(unittest.TestCase):
 
         self.assertEqual(data["cell_count"], 16)
         self.assertEqual(data["state_of_charge"], 80)
+
+
+class FakeSocket:
+    """Return one complete protocol frame."""
+
+    def __init__(self, response: bytes) -> None:
+        self.response = response
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def settimeout(self, _timeout: float) -> None:
+        pass
+
+    def sendall(self, _query: bytes) -> None:
+        pass
+
+    def recv(self, _size: int) -> bytes:
+        return self.response
+
+
+class QueryRetryTest(unittest.TestCase):
+    """Test recovery from transient TCP failures."""
+
+    @patch("api.time.sleep")
+    @patch("api.socket.create_connection")
+    def test_retries_each_query_with_backoff(self, create_connection, sleep) -> None:
+        header = bytes.fromhex("9a00000000000000")
+        response = header + _crc_modbus(header).to_bytes(2, "big") + b"\x9d"
+        create_connection.side_effect = [
+            ConnectionResetError(),
+            ConnectionResetError(),
+            FakeSocket(response),
+        ]
+
+        result = PaceexBmsApi("unused")._query(STATUS_QUERY)
+
+        self.assertEqual(result, response)
+        self.assertEqual(create_connection.call_count, 3)
+        self.assertEqual(sleep.call_args_list, [call(1), call(2)])
 
 
 if __name__ == "__main__":
