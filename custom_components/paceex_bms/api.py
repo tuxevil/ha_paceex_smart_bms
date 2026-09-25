@@ -70,10 +70,16 @@ class PaceexBmsApi:
         with self.session() as sess:
             return sess.query(query)
 
-    def read_device_info(self) -> PaceexDeviceInfo:
-        """Read the BMS serial number."""
-        response = self._query(SERIAL_QUERY)
+    @staticmethod
+    def _parse_device_info(response: bytes) -> PaceexDeviceInfo:
+        """Parse static device information from a serial-number response."""
+        if len(response) < 12:
+            raise PaceexProtocolError("BMS returned a truncated serial-number frame")
         length = response[8]
+        if length > response[7] - 1:
+            raise PaceexProtocolError(
+                f"Invalid serial number length: {length}, payload is {response[7]} byte(s)"
+            )
         serial = (
             response[9 : 9 + length].decode("ascii", errors="replace").strip("\x00 ")
         )
@@ -81,18 +87,30 @@ class PaceexBmsApi:
             raise PaceexProtocolError("BMS returned an empty serial number")
         return PaceexDeviceInfo(serial_number=serial)
 
-    def read_status(self) -> dict[str, float | int]:
-        """Read system and individual cell data over a single connection."""
-        with self.session() as sess:
-            status = sess.query(STATUS_QUERY)
-            # The Wi-Fi adapter briefly stops accepting connections after a
-            # reply; pacing queries avoids hitting its busy state.
-            time.sleep(QUERY_COOLDOWN)
-            cells_response = sess.query(CELLS_QUERY)
+    @staticmethod
+    def _parse_status(
+        status: bytes, cells_response: bytes
+    ) -> dict[str, float | int]:
+        """Parse system and individual cell responses."""
+        if len(status) < 35:
+            raise PaceexProtocolError(
+                f"Truncated PACEEX status frame: {len(status)} byte(s)"
+            )
+        if len(cells_response) < 12:
+            raise PaceexProtocolError(
+                f"Truncated PACEEX cell frame: {len(cells_response)} byte(s)"
+            )
 
         cell_count = cells_response[11]
         if not 1 <= cell_count <= 32:
             raise PaceexProtocolError(f"Invalid cell count: {cell_count}")
+
+        cell_data_end = 12 + (cell_count - 1) * 4 + 2
+        if cell_data_end > len(cells_response) - 3:
+            raise PaceexProtocolError(
+                f"Truncated PACEEX cell data for {cell_count} cells: "
+                f"{len(cells_response)} byte(s)"
+            )
 
         cells = [
             int.from_bytes(cells_response[12 + index * 4 : 14 + index * 4], "big")
@@ -121,6 +139,37 @@ class PaceexBmsApi:
         )
         return data
 
+    @staticmethod
+    def _read_device_info(sess: PaceexSession) -> PaceexDeviceInfo:
+        return PaceexBmsApi._parse_device_info(sess.query(SERIAL_QUERY))
+
+    @staticmethod
+    def _read_status(sess: PaceexSession) -> dict[str, float | int]:
+        status = sess.query(STATUS_QUERY)
+        time.sleep(QUERY_COOLDOWN)
+        cells_response = sess.query(CELLS_QUERY)
+        return PaceexBmsApi._parse_status(status, cells_response)
+
+    def read_device_info(self) -> PaceexDeviceInfo:
+        """Read the BMS serial number."""
+        with self.session() as sess:
+            return self._read_device_info(sess)
+
+    def read_status(self) -> dict[str, float | int]:
+        """Read system and individual cell data over a single connection."""
+        with self.session() as sess:
+            return self._read_status(sess)
+
+    def read_device_info_and_status(
+        self,
+    ) -> tuple[PaceexDeviceInfo, dict[str, float | int]]:
+        """Validate device identity and telemetry over one TCP session."""
+        with self.session() as sess:
+            info = self._read_device_info(sess)
+            time.sleep(QUERY_COOLDOWN)
+            data = self._read_status(sess)
+        return info, data
+
 
 class PaceexSession:
     """One TCP connection carrying a full poll cycle.
@@ -146,15 +195,21 @@ class PaceexSession:
         self.close()
 
     def _connect(self) -> None:
+        sock: socket.socket | None = None
         try:
-            self._sock = socket.create_connection(
-                (self._host, self._port), self._timeout
-            )
-            self._sock.settimeout(self._timeout)
+            sock = socket.create_connection((self._host, self._port), self._timeout)
+            sock.settimeout(self._timeout)
         except (OSError, TimeoutError) as err:
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+            self._sock = None
             raise PaceexConnectError(
                 f"Unable to reach PACEEX BMS at {self._host}:{self._port}: {err}"
             ) from err
+        self._sock = sock
 
     def close(self) -> None:
         """Close the connection, if open."""
@@ -176,6 +231,23 @@ class PaceexSession:
             self._connect()
             return self._query_once(query)
 
+    def _recv_exact(self, size: int) -> bytes:
+        """Read exactly size bytes or fail if the peer closes early."""
+        sock = self._sock
+        if sock is None:
+            raise PaceexReceiveError("PACEEX session has no open connection")
+
+        data = bytearray()
+        while len(data) < size:
+            chunk = sock.recv(size - len(data))
+            if not chunk:
+                raise PaceexReceiveError(
+                    f"PACEEX BMS at {self._host}:{self._port} closed the connection "
+                    f"after {len(data)} of {size} expected byte(s)"
+                )
+            data.extend(chunk)
+        return bytes(data)
+
     def _query_once(self, query: bytes) -> bytes:
         """Send one query over the current connection without retrying."""
         sock = self._sock
@@ -183,12 +255,13 @@ class PaceexSession:
             raise PaceexReceiveError("PACEEX session has no open connection")
         try:
             sock.sendall(query)
-            response = bytearray()
-            while not response.endswith(b"\x9d"):
-                chunk = sock.recv(4096)
-                if not chunk:
-                    break
-                response.extend(chunk)
+            header = self._recv_exact(8)
+            if header[0] != 0x9A:
+                raise PaceexProtocolError(
+                    f"Invalid PACEEX frame start: {header.hex()}"
+                )
+            expected_length = 11 + header[7]
+            frame = header + self._recv_exact(expected_length - len(header))
         except (ConnectionResetError, BrokenPipeError) as err:
             raise PaceexReceiveError(
                 f"PACEEX BMS at {self._host}:{self._port} reset the connection: {err}"
@@ -198,19 +271,8 @@ class PaceexSession:
                 f"PACEEX BMS at {self._host}:{self._port} did not answer in time: {err}"
             ) from err
 
-        if not response:
-            raise PaceexReceiveError(
-                f"PACEEX BMS at {self._host}:{self._port} closed the connection "
-                "without answering"
-            )
-        frame = bytes(response)
-        if len(frame) < 11 or frame[0] != 0x9A or frame[-1] != 0x9D:
-            raise PaceexProtocolError(f"Invalid PACEEX frame: {frame.hex()}")
-        expected_length = 11 + frame[7]
-        if len(frame) != expected_length:
-            raise PaceexProtocolError(
-                f"Invalid PACEEX frame length: {len(frame)}, expected {expected_length}"
-            )
+        if frame[-1] != 0x9D:
+            raise PaceexProtocolError(f"Invalid PACEEX frame tail: {frame.hex()}")
         received_crc = int.from_bytes(frame[-3:-1], "big")
         if _crc_modbus(frame[:-3]) != received_crc:
             raise PaceexProtocolError("Invalid PACEEX frame checksum")
