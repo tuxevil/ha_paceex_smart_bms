@@ -78,7 +78,8 @@ class PaceexBmsApi:
         length = response[8]
         if length > response[7] - 1:
             raise PaceexProtocolError(
-                f"Invalid serial number length: {length}, payload is {response[7]} byte(s)"
+                f"Invalid serial number length: {length}, "
+                f"payload is {response[7]} byte(s)"
             )
         serial = (
             response[9 : 9 + length].decode("ascii", errors="replace").strip("\x00 ")
