@@ -15,6 +15,7 @@ from api import (
     CELLS_QUERY,
     QUERY_COOLDOWN,
     RECONNECT_COOLDOWN,
+    SERIAL_QUERY,
     STATUS_QUERY,
     PaceexBmsApi,
     PaceexConnectError,
@@ -25,10 +26,11 @@ from api import (
 )
 
 
-def make_frame(size: int, fill=None) -> bytes:
-    """Build a valid PACEEX frame of the given total size."""
+def make_frame(size: int, fill=None, query=STATUS_QUERY) -> bytes:
+    """Build a valid PACEEX response frame for a request."""
     frame = bytearray(size)
     frame[0] = 0x9A
+    frame[1:7] = query[1:7]
     frame[7] = size - 11
     if fill is not None:
         fill(frame)
@@ -94,7 +96,7 @@ class SessionTest(unittest.TestCase):
     @patch("api.socket.create_connection")
     def test_read_status_uses_single_connection(self, create_connection, sleep) -> None:
         status = make_frame(62, fill_status)
-        cells = make_frame(77, fill_cells)
+        cells = make_frame(79, fill_cells, CELLS_QUERY)
         sock = FakeSocket([status, cells])
         create_connection.return_value = sock
 
@@ -113,12 +115,14 @@ class SessionTest(unittest.TestCase):
         self, create_connection, sleep
     ) -> None:
         serial_payload = b"PACEEX-TEST"
-        serial = bytearray(make_frame(12 + len(serial_payload)))
+        serial = bytearray(
+            make_frame(12 + len(serial_payload), query=SERIAL_QUERY)
+        )
         serial[8] = len(serial_payload)
         serial[9 : 9 + len(serial_payload)] = serial_payload
         serial[-3:-1] = _crc_modbus(bytes(serial[:-3])).to_bytes(2, "big")
         status = make_frame(62, fill_status)
-        cells = make_frame(77, fill_cells)
+        cells = make_frame(79, fill_cells, CELLS_QUERY)
         sock = FakeSocket([bytes(serial), status, cells])
         create_connection.return_value = sock
 
@@ -155,6 +159,26 @@ class SessionTest(unittest.TestCase):
         result = PaceexBmsApi("unused")._query(STATUS_QUERY)
 
         self.assertEqual(result, frame)
+
+    @patch("api.time.sleep")
+    @patch("api.socket.create_connection")
+    def test_reconnects_once_after_unexpected_response(
+        self, create_connection, sleep
+    ) -> None:
+        wrong = bytearray(make_frame(62, fill_status))
+        wrong[3] = 0x0B
+        wrong[-3:-1] = _crc_modbus(bytes(wrong[:-3])).to_bytes(2, "big")
+        right = make_frame(62, fill_status)
+        create_connection.side_effect = [
+            FakeSocket([bytes(wrong)]),
+            FakeSocket([right]),
+        ]
+
+        result = PaceexBmsApi("unused")._query(STATUS_QUERY)
+
+        self.assertEqual(result, right)
+        self.assertEqual(create_connection.call_count, 2)
+        self.assertEqual(sleep.call_args_list, [call(RECONNECT_COOLDOWN)])
 
     @patch("api.time.sleep")
     @patch("api.socket.create_connection")
