@@ -262,6 +262,11 @@ class PaceexSession:
                 )
             expected_length = 11 + header[7]
             frame = header + self._recv_exact(expected_length - len(header))
+            if frame[1:7] != query[1:7]:
+                raise PaceexReceiveError(
+                    "PACEEX BMS returned an unexpected response type: "
+                    f"{frame[1:7].hex()} (expected {query[1:7].hex()})"
+                )
         except (ConnectionResetError, BrokenPipeError) as err:
             raise PaceexReceiveError(
                 f"PACEEX BMS at {self._host}:{self._port} reset the connection: {err}"
