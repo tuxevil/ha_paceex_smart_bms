@@ -22,7 +22,12 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import PaceexConfigEntry
-from .const import DOMAIN, MANUFACTURER, MODEL
+from .const import (
+    DOMAIN,
+    MANUFACTURER,
+    MODEL,
+    UNAVAILABLE_AFTER_FAILURES,
+)
 from .coordinator import PaceexDataUpdateCoordinator
 
 
@@ -114,6 +119,8 @@ SENSORS = (
 )
 
 
+DIAGNOSTIC_KEYS = frozenset({"consecutive_failures", "last_success"})
+
 DIAGNOSTICS = (
     PaceexSensorEntityDescription(
         key="consecutive_failures",
@@ -137,7 +144,10 @@ async def async_setup_entry(
 ) -> None:
     """Set up PACEEX BMS sensors."""
     coordinator = entry.runtime_data
-    info = await hass.async_add_executor_job(coordinator.api.read_device_info)
+    serial_number = entry.unique_id
+    if serial_number is None:
+        raise RuntimeError("PACEEX config entry is missing its serial-number unique ID")
+
     descriptions = list(SENSORS)
     for index in range(1, int(coordinator.data["cell_count"]) + 1):
         descriptions.append(
@@ -151,7 +161,7 @@ async def async_setup_entry(
             )
         )
     async_add_entities(
-        PaceexSensor(coordinator, description, info.serial_number)
+        PaceexSensor(coordinator, description, serial_number)
         for description in (*descriptions, *DIAGNOSTICS)
     )
 
@@ -171,6 +181,16 @@ class PaceexSensor(CoordinatorEntity[PaceexDataUpdateCoordinator], SensorEntity)
             model=MODEL,
             name="PACEEX Smart BMS",
             serial_number=serial_number,
+        )
+
+    @property
+    def available(self) -> bool:
+        """Keep diagnostics visible while stale telemetry is unavailable."""
+        if self.entity_description.key in DIAGNOSTIC_KEYS:
+            return True
+        return (
+            self.coordinator.last_update_success
+            and self.coordinator.consecutive_failures < UNAVAILABLE_AFTER_FAILURES
         )
 
     @property
