@@ -11,7 +11,7 @@ sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "custom_components" / "paceex_bms")
 )
 
-from api import (
+from api import (  # noqa: E402
     CELLS_QUERY,
     QUERY_COOLDOWN,
     RECONNECT_COOLDOWN,
@@ -151,7 +151,9 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(create_connection.call_count, 1)
 
     @patch("api.socket.create_connection")
-    def test_frame_reader_handles_fragmented_tcp_response(self, create_connection) -> None:
+    def test_frame_reader_handles_fragmented_tcp_response(
+        self, create_connection
+    ) -> None:
         frame = make_frame(62, fill_status)
         sock = FakeSocket([frame], recv_chunk_size=3)
         create_connection.return_value = sock
