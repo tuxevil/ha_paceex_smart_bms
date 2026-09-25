@@ -11,7 +11,7 @@ sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "custom_components" / "paceex_bms")
 )
 
-from api import (  # noqa: E402
+from api import (
     CELLS_QUERY,
     QUERY_COOLDOWN,
     RECONNECT_COOLDOWN,
@@ -115,9 +115,7 @@ class SessionTest(unittest.TestCase):
         self, create_connection, sleep
     ) -> None:
         serial_payload = b"PACEEX-TEST"
-        serial = bytearray(
-            make_frame(12 + len(serial_payload), query=SERIAL_QUERY)
-        )
+        serial = bytearray(make_frame(12 + len(serial_payload), query=SERIAL_QUERY))
         serial[8] = len(serial_payload)
         serial[9 : 9 + len(serial_payload)] = serial_payload
         serial[-3:-1] = _crc_modbus(bytes(serial[:-3])).to_bytes(2, "big")

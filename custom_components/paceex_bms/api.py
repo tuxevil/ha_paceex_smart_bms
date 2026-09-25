@@ -89,9 +89,7 @@ class PaceexBmsApi:
         return PaceexDeviceInfo(serial_number=serial)
 
     @staticmethod
-    def _parse_status(
-        status: bytes, cells_response: bytes
-    ) -> dict[str, float | int]:
+    def _parse_status(status: bytes, cells_response: bytes) -> dict[str, float | int]:
         """Parse system and individual cell responses."""
         if len(status) < 35:
             raise PaceexProtocolError(
@@ -258,9 +256,7 @@ class PaceexSession:
             sock.sendall(query)
             header = self._recv_exact(8)
             if header[0] != 0x9A:
-                raise PaceexProtocolError(
-                    f"Invalid PACEEX frame start: {header.hex()}"
-                )
+                raise PaceexProtocolError(f"Invalid PACEEX frame start: {header.hex()}")
             expected_length = 11 + header[7]
             frame = header + self._recv_exact(expected_length - len(header))
             if frame[1:7] != query[1:7]:
