@@ -104,8 +104,8 @@ Until this repository is included in the default HACS catalog:
 4. Enter:
    - **Host:** the local IP address of the BMS Wi-Fi module;
    - **Port:** normally `8888`;
-- **Update interval:** polling interval in seconds (minimum `5`, default
-  `30`).
+   - **Update interval:** polling interval in seconds (minimum `5`, default
+     `30`).
 
 > [!NOTE]
 > The BMS Wi-Fi module handles one connection at a time and briefly stops
@@ -139,9 +139,12 @@ connection per cycle:
 - system/pack status;
 - individual cell data.
 
-Responses are validated for frame markers, declared length, and Modbus CRC
-before any entity is updated. Network I/O runs outside Home Assistant's event
-loop, and a single `DataUpdateCoordinator` shares each poll across all sensors.
+Responses are read according to the protocol's declared frame length rather
+than by searching for the `0x9D` tail byte. This matters because `0x9D` can
+legitimately occur inside binary payload data. Frame markers, declared length,
+and Modbus CRC are validated before any entity is updated. Network I/O runs
+outside Home Assistant's event loop, and a single `DataUpdateCoordinator`
+shares each poll across all sensors.
 
 ## Troubleshooting
 
@@ -161,8 +164,10 @@ local TCP endpoint to be reachable from Home Assistant.
 
 ### Entities become unavailable
 
-Entities only go unavailable after 3 consecutive failed polls (about 90
-seconds at the default interval); isolated failures keep the last values.
+Telemetry entities only go unavailable after 3 consecutive failed polls
+(about 90 seconds at the default interval); isolated failures keep the last
+values. The `consecutive failures` and `last successful update` diagnostic
+sensors remain available during an outage so the failure can be inspected.
 If unavailability persists:
 
 - Close the vendor **BMS-TOOL** app: while it holds a session, the module
@@ -176,7 +181,8 @@ If unavailability persists:
   (`PaceexConnectError`, `PaceexReceiveError`, `PaceexProtocolError`) to tell
   an unreachable host apart from a module that resets queries.
 - The `consecutive failures` and `last successful update` diagnostic sensors
-  show whether the link is flapping or steadily down.
+  show whether the link is flapping or steadily down; they remain available
+  even when battery telemetry has been marked unavailable.
 
 ### Current or power sign is reversed
 
