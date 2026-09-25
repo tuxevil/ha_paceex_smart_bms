@@ -17,6 +17,7 @@ from homeassistant.const import (
     UnitOfPower,
 )
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -113,6 +114,22 @@ SENSORS = (
 )
 
 
+DIAGNOSTICS = (
+    PaceexSensorEntityDescription(
+        key="consecutive_failures",
+        name="Consecutive failures",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:counter",
+    ),
+    PaceexSensorEntityDescription(
+        key="last_success",
+        name="Last successful update",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+)
+
+
 async def async_setup_entry(
     hass,
     entry: PaceexConfigEntry,
@@ -135,7 +152,7 @@ async def async_setup_entry(
         )
     async_add_entities(
         PaceexSensor(coordinator, description, info.serial_number)
-        for description in descriptions
+        for description in (*descriptions, *DIAGNOSTICS)
     )
 
 
@@ -159,4 +176,8 @@ class PaceexSensor(CoordinatorEntity[PaceexDataUpdateCoordinator], SensorEntity)
     @property
     def native_value(self):
         """Return the latest coordinated sensor value."""
-        return self.coordinator.data.get(self.entity_description.key)
+        if self.entity_description.key == "consecutive_failures":
+            return self.coordinator.consecutive_failures
+        if self.entity_description.key == "last_success":
+            return self.coordinator.last_success
+        return (self.coordinator.data or {}).get(self.entity_description.key)

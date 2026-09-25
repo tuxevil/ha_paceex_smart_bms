@@ -13,8 +13,10 @@ required.
 
 - Fully local polling over TCP.
 - Configuration through the Home Assistant UI.
-- One coordinated request cycle for all entities.
-- Automatic availability and reconnect handling.
+- One coordinated request cycle per poll, over a single TCP connection.
+- Tolerant availability: brief poll failures keep the last values instead of
+  marking every entity unavailable.
+- Link diagnostics (consecutive failures, last successful update).
 - Individual cell voltage monitoring.
 - English and Spanish UI translations.
 - No Python package dependencies outside Home Assistant Core.
@@ -102,8 +104,15 @@ Until this repository is included in the default HACS catalog:
 4. Enter:
    - **Host:** the local IP address of the BMS Wi-Fi module;
    - **Port:** normally `8888`;
-   - **Update interval:** polling interval in seconds (minimum `5`, default
-     `15`).
+- **Update interval:** polling interval in seconds (minimum `5`, default
+  `30`).
+
+> [!NOTE]
+> The BMS Wi-Fi module handles one connection at a time and briefly stops
+> accepting connections after each reply. Intervals below `30` seconds hammer
+> this fragile adapter and cause the very `unavailable` states you want to
+> avoid. `30`–`60` seconds is recommended. Installations configured before
+> v0.2.0 keep their previous interval; change it via **Configure**.
 
 During setup, the integration reads the BMS serial number and a complete status
 sample. Configuration is rejected if the endpoint is unreachable or does not
@@ -124,7 +133,8 @@ name. The mobile application is not required after this integration is set up.
 
 ## How it works
 
-Home Assistant polls two read-only PACEEX commands:
+Home Assistant polls two read-only PACEEX commands over a single TCP
+connection per cycle:
 
 - system/pack status;
 - individual cell data.
@@ -151,9 +161,22 @@ local TCP endpoint to be reachable from Home Assistant.
 
 ### Entities become unavailable
 
-The integration marks entities unavailable after a failed update and retries
-on the next interval. Check the BMS Wi-Fi signal, DHCP lease, and Home Assistant
-logs for `paceex_bms` messages.
+Entities only go unavailable after 3 consecutive failed polls (about 90
+seconds at the default interval); isolated failures keep the last values.
+If unavailability persists:
+
+- Close the vendor **BMS-TOOL** app: while it holds a session, the module
+  resets other clients.
+- Check the BMS Wi-Fi signal and power-cycle the module if it stopped
+  answering entirely.
+- Verify the BMS IP address has not changed (a DHCP reservation is strongly
+  recommended).
+- Check the Home Assistant logs for `paceex_bms` messages. Connection,
+  reception, and protocol failures are logged separately
+  (`PaceexConnectError`, `PaceexReceiveError`, `PaceexProtocolError`) to tell
+  an unreachable host apart from a module that resets queries.
+- The `consecutive failures` and `last successful update` diagnostic sensors
+  show whether the link is flapping or steadily down.
 
 ### Current or power sign is reversed
 

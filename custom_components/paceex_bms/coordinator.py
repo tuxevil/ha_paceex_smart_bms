@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 
 from homeassistant.config_entries import ConfigEntry
@@ -11,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import PaceexBmsApi, PaceexError
-from .const import DOMAIN, UPDATE_RETRIES, UPDATE_RETRY_DELAY
+from .const import DOMAIN, STALE_DATA_TOLERANCE
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -35,24 +34,28 @@ class PaceexDataUpdateCoordinator(DataUpdateCoordinator[dict[str, float | int]])
             always_update=False,
         )
         self.api = api
+        self.consecutive_failures = 0
+        self.last_success: datetime | None = None
 
     async def _async_update_data(self) -> dict[str, float | int]:
-        for attempt in range(UPDATE_RETRIES + 1):
-            try:
-                return await self.hass.async_add_executor_job(self.api.read_status)
-            except PaceexError as err:
-                if attempt == UPDATE_RETRIES:
-                    raise UpdateFailed(
-                        f"Error communicating with PACEEX BMS after "
-                        f"{UPDATE_RETRIES + 1} attempts: {err}"
-                    ) from err
-
-                _LOGGER.debug(
-                    "PACEEX BMS update attempt %s failed; retrying in %s second(s): %s",
-                    attempt + 1,
-                    UPDATE_RETRY_DELAY,
-                    err,
-                )
-                await asyncio.sleep(UPDATE_RETRY_DELAY)
-
-        raise UpdateFailed("PACEEX BMS update failed")
+        # Single attempt per cycle: the API already reconnects once when the
+        # adapter drops a query, so hammering a busy adapter with immediate
+        # full re-polls only makes recovery slower.
+        try:
+            data = await self.hass.async_add_executor_job(self.api.read_status)
+        except PaceexError as err:
+            self.consecutive_failures += 1
+            if self.data is None or self.consecutive_failures > STALE_DATA_TOLERANCE:
+                raise UpdateFailed(
+                    f"Error communicating with PACEEX BMS "
+                    f"({self.consecutive_failures} consecutive failures): {err}"
+                ) from err
+            _LOGGER.warning(
+                "PACEEX BMS poll failed (%s consecutive); keeping last values: %s",
+                self.consecutive_failures,
+                err,
+            )
+            return self.data
+        self.consecutive_failures = 0
+        self.last_success = datetime.now(timezone.utc)
+        return data
