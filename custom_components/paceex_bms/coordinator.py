@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import PaceexBmsApi, PaceexError
-from .const import DOMAIN, STALE_DATA_TOLERANCE
+from .const import DOMAIN, UNAVAILABLE_AFTER_FAILURES
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,31 +31,50 @@ class PaceexDataUpdateCoordinator(DataUpdateCoordinator[dict[str, float | int]])
             config_entry=entry,
             name=DOMAIN,
             update_interval=timedelta(seconds=interval),
-            always_update=False,
+            # Diagnostic sensors are coordinator state rather than payload data,
+            # so listeners must run even when the battery readings are unchanged.
+            always_update=True,
         )
         self.api = api
         self.consecutive_failures = 0
         self.last_success: datetime | None = None
 
     async def _async_update_data(self) -> dict[str, float | int]:
-        # Single attempt per cycle: the API already reconnects once when the
-        # adapter drops a query, so hammering a busy adapter with immediate
-        # full re-polls only makes recovery slower.
+        """Poll once while preserving stale data across transient outages."""
         try:
             data = await self.hass.async_add_executor_job(self.api.read_status)
         except PaceexError as err:
             self.consecutive_failures += 1
-            if self.data is None or self.consecutive_failures > STALE_DATA_TOLERANCE:
+            if self.data is None:
                 raise UpdateFailed(
-                    f"Error communicating with PACEEX BMS "
-                    f"({self.consecutive_failures} consecutive failures): {err}"
+                    f"Error communicating with PACEEX BMS during initial refresh: {err}"
                 ) from err
-            _LOGGER.warning(
-                "PACEEX BMS poll failed (%s consecutive); keeping last values: %s",
-                self.consecutive_failures,
-                err,
-            )
+
+            if self.consecutive_failures == 1:
+                _LOGGER.warning(
+                    "PACEEX BMS poll failed; keeping last values: %s",
+                    err,
+                )
+            elif self.consecutive_failures == UNAVAILABLE_AFTER_FAILURES:
+                _LOGGER.warning(
+                    "PACEEX BMS has failed %s consecutive polls; telemetry entities "
+                    "are now unavailable while diagnostics remain active: %s",
+                    self.consecutive_failures,
+                    err,
+                )
+            else:
+                _LOGGER.debug(
+                    "PACEEX BMS poll still failing (%s consecutive): %s",
+                    self.consecutive_failures,
+                    err,
+                )
             return self.data
+
+        if self.consecutive_failures:
+            _LOGGER.info(
+                "PACEEX BMS communication recovered after %s failed poll(s)",
+                self.consecutive_failures,
+            )
         self.consecutive_failures = 0
         self.last_success = datetime.now(timezone.utc)
         return data
