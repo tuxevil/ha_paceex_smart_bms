@@ -22,8 +22,7 @@ from .const import (
 
 async def _validate_input(hass: HomeAssistant, data: dict[str, Any]) -> str:
     api = PaceexBmsApi(data[CONF_HOST], data[CONF_PORT])
-    info = await hass.async_add_executor_job(api.read_device_info)
-    await hass.async_add_executor_job(api.read_status)
+    info, _status = await hass.async_add_executor_job(api.read_device_info_and_status)
     return info.serial_number
 
 
