@@ -49,19 +49,16 @@ def fill_cells(frame: bytearray) -> None:
 
 
 class FakeSocket:
-    """Serve a scripted sequence of responses on one connection."""
+    """Serve one scripted response for each request on a connection."""
 
-    def __init__(self, responses=(), send_error=None):
-        self._responses = list(responses)
+    def __init__(self, responses=(), send_error=None, recv_chunk_size=None):
+        self._responses = [bytes(response) for response in responses]
+        self._response_index = 0
+        self._active_response = bytearray()
         self._send_error = send_error
+        self._recv_chunk_size = recv_chunk_size
         self.sent: list[bytes] = []
         self.closed = False
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args) -> None:
-        self.close()
 
     def settimeout(self, _timeout: float) -> None:
         pass
@@ -70,24 +67,34 @@ class FakeSocket:
         self.sent.append(data)
         if self._send_error is not None:
             raise self._send_error
+        if self._response_index < len(self._responses):
+            self._active_response = bytearray(self._responses[self._response_index])
+            self._response_index += 1
+        else:
+            self._active_response = bytearray()
 
-    def recv(self, _size: int) -> bytes:
-        if not self._responses:
+    def recv(self, size: int) -> bytes:
+        if not self._active_response:
             return b""
-        return self._responses.pop(0)
+        size = min(size, len(self._active_response))
+        if self._recv_chunk_size is not None:
+            size = min(size, self._recv_chunk_size)
+        chunk = bytes(self._active_response[:size])
+        del self._active_response[:size]
+        return chunk
 
     def close(self) -> None:
         self.closed = True
 
 
 class SessionTest(unittest.TestCase):
-    """Test the single-connection poll cycle."""
+    """Test persistent TCP sessions and frame handling."""
 
     @patch("api.time.sleep")
     @patch("api.socket.create_connection")
     def test_read_status_uses_single_connection(self, create_connection, sleep) -> None:
         status = make_frame(62, fill_status)
-        cells = make_frame(76, fill_cells)
+        cells = make_frame(77, fill_cells)
         sock = FakeSocket([status, cells])
         create_connection.return_value = sock
 
@@ -99,6 +106,55 @@ class SessionTest(unittest.TestCase):
         self.assertEqual(sock.sent, [STATUS_QUERY, CELLS_QUERY])
         self.assertEqual(sleep.call_args_list, [call(QUERY_COOLDOWN)])
         self.assertTrue(sock.closed)
+
+    @patch("api.time.sleep")
+    @patch("api.socket.create_connection")
+    def test_setup_validation_uses_single_connection(
+        self, create_connection, sleep
+    ) -> None:
+        serial_payload = b"PACEEX-TEST"
+        serial = bytearray(make_frame(12 + len(serial_payload)))
+        serial[8] = len(serial_payload)
+        serial[9 : 9 + len(serial_payload)] = serial_payload
+        serial[-3:-1] = _crc_modbus(bytes(serial[:-3])).to_bytes(2, "big")
+        status = make_frame(62, fill_status)
+        cells = make_frame(77, fill_cells)
+        sock = FakeSocket([bytes(serial), status, cells])
+        create_connection.return_value = sock
+
+        info, data = PaceexBmsApi("unused").read_device_info_and_status()
+
+        self.assertEqual(info.serial_number, "PACEEX-TEST")
+        self.assertEqual(data["state_of_charge"], 80)
+        self.assertEqual(create_connection.call_count, 1)
+        self.assertEqual(len(sock.sent), 3)
+        self.assertEqual(
+            sleep.call_args_list,
+            [call(QUERY_COOLDOWN), call(QUERY_COOLDOWN)],
+        )
+
+    @patch("api.socket.create_connection")
+    def test_frame_reader_ignores_internal_tail_byte(self, create_connection) -> None:
+        frame = bytearray(make_frame(62, fill_status))
+        frame[12] = 0x9D
+        frame[-3:-1] = _crc_modbus(bytes(frame[:-3])).to_bytes(2, "big")
+        sock = FakeSocket([bytes(frame)], recv_chunk_size=13)
+        create_connection.return_value = sock
+
+        result = PaceexBmsApi("unused")._query(STATUS_QUERY)
+
+        self.assertEqual(result, bytes(frame))
+        self.assertEqual(create_connection.call_count, 1)
+
+    @patch("api.socket.create_connection")
+    def test_frame_reader_handles_fragmented_tcp_response(self, create_connection) -> None:
+        frame = make_frame(62, fill_status)
+        sock = FakeSocket([frame], recv_chunk_size=3)
+        create_connection.return_value = sock
+
+        result = PaceexBmsApi("unused")._query(STATUS_QUERY)
+
+        self.assertEqual(result, frame)
 
     @patch("api.time.sleep")
     @patch("api.socket.create_connection")
@@ -133,18 +189,21 @@ class SessionTest(unittest.TestCase):
         with self.assertRaises(PaceexReceiveError) as ctx:
             PaceexBmsApi("unused")._query(STATUS_QUERY)
 
-        self.assertIn("without answering", str(ctx.exception))
+        self.assertIn("closed the connection", str(ctx.exception))
         self.assertEqual(create_connection.call_count, 2)
 
     @patch("api.time.sleep")
     @patch("api.socket.create_connection")
     def test_protocol_error_does_not_reconnect(self, create_connection, sleep) -> None:
-        create_connection.return_value = FakeSocket([b"\x9a\x00garbage\x9d"])
+        bad_tail = bytearray(make_frame(11))
+        bad_tail[-1] = 0
+        create_connection.return_value = FakeSocket([bytes(bad_tail)])
 
         with self.assertRaises(PaceexProtocolError):
             PaceexBmsApi("unused")._query(STATUS_QUERY)
 
         self.assertEqual(create_connection.call_count, 1)
+        self.assertEqual(sleep.call_args_list, [])
 
 
 if __name__ == "__main__":
